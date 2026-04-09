@@ -1,6 +1,6 @@
 "use client";
 import { useState, useMemo } from 'react';
-import { calculateANOVA, generateCurveData, getCriticalValue } from '@/utils/statistics';
+import { calculateANOVA, generateCurveData, getCriticalValue, calculateShapiroWilk, calculateBartlett } from '@/utils/statistics';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
 import ExplanationBox from '@/components/ExplanationBox';
 
@@ -42,6 +42,18 @@ export default function Part1ANOVA({ showExplanations = false }) {
     });
   }, [groups, anova.means]);
 
+  const shapiro = useMemo(() => {
+    let flatResiduals = [];
+    residuals.forEach(g => flatResiduals.push(...g));
+    return calculateShapiroWilk(flatResiduals);
+  }, [residuals]);
+
+  const bartlett = useMemo(() => {
+    return calculateBartlett(groups.map(g => g.data));
+  }, [groups]);
+
+  const cvBartlett = getCriticalValue('chisquare', alpha, { df: bartlett.df }, 1);
+
   const cvF = getCriticalValue('f', alpha, { df1: anova.DF_t, df2: anova.DF_e });
   const chartDataF = useMemo(() => generateCurveData('f', { df1: anova.DF_t, df2: anova.DF_e }, cvF, 'right'), [anova, cvF]);
 
@@ -59,7 +71,7 @@ export default function Part1ANOVA({ showExplanations = false }) {
     let sorted = [...seq].sort((a,b)=>a-b);
     let median = (sorted[Math.floor((sorted.length-1)/2)] + sorted[Math.ceil((sorted.length-1)/2)]) / 2.0;
 
-    let signs = seq.map(v => v > median ? '+' : (v < median ? '-' : null)).filter(v => v !== null);
+    let signs = seq.map(v => v >= median ? '+' : '-');
     let n1 = signs.filter(v => v === '+').length;
     let n2 = signs.filter(v => v === '-').length;
 
@@ -170,15 +182,17 @@ export default function Part1ANOVA({ showExplanations = false }) {
                 </div>
 
                 <div className="bg-emerald-50 p-4 rounded-xl border border-emerald-100">
-                  <p className="text-emerald-900 font-bold mb-1">{"Cálculo de la Varianza (σ²):"}</p>
+                  <p className="text-emerald-900 font-bold mb-1">{"Cálculo de la Varianza Muestral Global (S²):"}</p>
                   <div className="font-mono text-sm bg-white p-2 rounded border border-emerald-200 mb-2 overflow-x-auto whitespace-nowrap">
-                    {"σ² ≈ CM"}<sub>{"Error"}</sub>{" = SC"}<sub>{"e"}</sub>{" / (N-k)"}<br/>
-                    {"σ² ≈ "}{anova.SCe.toFixed(4)}{" / ("}{anova.N}{" - "}{anova.k}{")"}
+                    {"S² = Σ(Y"}<sub className="text-xs">ij</sub>{" - ȳ)² / (N - 1)"}<br/>
+                    <span className="text-xs text-slate-500 italic mt-1 font-sans block">{"* Es la equivalente directa a la Suma de Cuadrados Totales dividida entre (N-1):"}</span>
+                    {"S² = SCT / (N - 1)"}<br/>
+                    {"S² = "}{anova.SCT.toFixed(5)}{" / "}{anova.N-1}
                   </div>
-                  <p className="text-lg font-bold text-emerald-700">{"CM"}<sub>{"Error"}</sub>{" = "}{anova.MSe.toFixed(4)}</p>
-                  <ExplanationBox show={showExplanations} title="Estimación de la Varianza Compartida (σ²)">
-                    <p>ANOVA asume que <strong>todas las arquitecturas comparten la misma varianza σ²</strong>. El mejor estimador de σ² es el Cuadrado Medio del Error (CMᵊ), que divide la Suma de Cuadrados del Error (SCᵉ = {anova.SCe.toFixed(4)}) entre sus grados de libertad ({anova.DF_e}).</p>
-                    <p>Un CMᵊ pequeño indica que los ensayos dentro de cada grupo son muy consistentes (buena precisión experimental). El valor {anova.MSe.toFixed(4)} refleja la variabilidad intra-grupo de nuestras mediciones de red.</p>
+                  <p className="text-lg font-bold text-emerald-700">{"S² = "}{(anova.SCT / (anova.N - 1)).toFixed(5)}</p>
+                  <ExplanationBox show={showExplanations} title="Estimación inicial de la Varianza (σ²)">
+                    <p>Antes de estructurar el diseño ANOVA (donde destripamos qué parte de la dispersión se debe a las arquitecturas y qué parte al error), la estimación paramétrica global inicial que hacemos es la <strong>Varianza Muestral Global (S²)</strong> considerando a todos los datos como una misma familia.</p>
+                    <p>Nos calcula cuánto se aleja cada medición de red ($Y_i$) respecto al promedio absoluto (${anova.grandMean.toFixed(4)}$). Si calculaste la desviación estándar global en una calculadora y la elevaste al cuadrado, verás exactamente esto: <strong>{(anova.SCT / (anova.N - 1)).toFixed(5)}</strong>.</p>
                   </ExplanationBox>
                 </div>
 
@@ -333,11 +347,10 @@ export default function Part1ANOVA({ showExplanations = false }) {
                     <span className="text-lg font-bold text-blue-700">{"LSD = "}{lsd.toFixed(4)}</span>
                   </div>
                 </div>
-                <ExplanationBox show={showExplanations} title="LSD de Fisher: ¿Cómo interpretar el umbral?">
-                  <p>El LSD ({lsd.toFixed(4)} seg) es la <strong>diferencia mínima entre dos medias</strong> que debe existir para que podamos declarar que son estadísticamente distintas (no un accidente del azar).</p>
-                  <p><strong>t crítico ({tCrit.toFixed(4)}):</strong> Extraido de la tabla T-Student con {anova.DF_e} grados de libertad y α/2 = 0.025 (cola bilateral). Este valor actúa como multiplicador de escala.</p>
-                  <p><strong>CMᵊ ({anova.MSe.toFixed(4)}):</strong> La varianza residual compartida. Al multiplicar por (1/nᵢ + 1/nⱼ) = (1/4 + 1/4) = 0.5, obtenemos la varianza de la diferencia de dos medias con igual tamaño muestral.</p>
-                  <p>Si |ȳᵢ − ȳⱼ| &gt; {lsd.toFixed(4)}, la diferencia es <strong>real y significativa</strong>. Si no, es simplemente ruido experimental.</p>
+                <ExplanationBox show={showExplanations} title="Porqué DMS de Fisher es el método ideal sobre otras alternativas">
+                  <p><strong>DMS (LSD) vs Los Demás:</strong> El espectro de Pruebas Post-Hoc tiene opciones como <strong>Tukey, Bonferroni o Scheffé</strong>. Estas alternativas son hiper-conservadoras (penalizan tu P-valor y expanden la diferencia mínima a fin de "no equivocarse"). El DMS usa la T-Student estricta.</p>
+                  <p><strong>¿Por qué elegir DMS?</strong> La gran debilidad del DMS clásico es que, si tienes demasiados grupos, incrementa el riesgo de un Falso Positivo. Sin embargo, en el paso 2 aplicamos estrictamente el modelo ANOVA 1-Vía primero, resultando altamente significativo. A esto se le atribuye ser un <strong>"DMS Protegido de Fisher"</strong>.</p>
+                  <p>Es la mejor elección ingenieril porque: 1) Nuestro P-Valor general del paso 2 es aplastante y bloquea la tasa de error global, y 2) Al ser la prueba post-hoc con mayor "Poder Estadístico", el DMS es capaz de detectar imperceptibles e ínfimas variaciones en el tiempo de procesamiento que métodos como el Test de Tukey castigarían e invisibilizarían de largo.</p>
                 </ExplanationBox>
               </div>
 
@@ -401,28 +414,61 @@ export default function Part1ANOVA({ showExplanations = false }) {
                   </div>
                 </div>
 
-                <div className="bg-indigo-50 p-5 rounded-xl border border-indigo-200 flex flex-col items-center justify-center text-center">
-                  <h4 className="font-bold text-indigo-900 mb-2">{"Test de Shapiro-Wilk"}</h4>
-                  <p className="font-serif w-full bg-white p-3 rounded shadow-sm border border-indigo-100 text-indigo-700 text-sm mb-4 break-words">
-                    {"W = [Σ a"}<sub>{"i"}</sub>{" (e"}<sub>{"(n-i+1)"}</sub>{" - e"}<sub>{"(i)"}</sub>{")]² / Σ (e"}<sub>{"i"}</sub>{" - ē)²"}
+                <div className="bg-indigo-50 p-5 rounded-xl border border-indigo-200 flex flex-col justify-center shadow-sm">
+                  <h4 className="font-bold text-indigo-900 mb-2 border-b border-indigo-200 pb-2">{"Test de Shapiro-Wilk (Paso a Paso)"}</h4>
+                  <p className="font-serif bg-white p-3 rounded shadow-sm border border-indigo-100 text-indigo-700 text-sm mb-4 break-words text-center">
+                    {"W = [Σ a"}<sub>{"i"}</sub>{" (e"}<sub>{"(n-i+1)"}</sub>{" - e"}<sub>{"(i)"}</sub>{")]² / Σ (e"}<sub>{"i"}</sub>{" - ē)²"}
                   </p>
-                  <p className="text-sm text-indigo-900 border-t border-indigo-200 pt-3">
-                    {"Dado que alinear gráficamente muestra tan escasa cantidad de residuales (N=12) podría arrojar pautas confusas en un Q-Q Plot, usaríamos el estadístico W formal sobre los valores pre-calculados a mano."}
-                  </p>
-                  <ExplanationBox show={showExplanations} title="¿Qué es el Test de Shapiro-Wilk y cómo funciona?">
-                    <p><strong>W</strong> mide la correlación entre los residuales ordenados y los cuantiles teóricos de la distribución Normal. Si W ≈ 1, los datos se ajustan perfectamente a una campana de Gauss. Si W es significativamente menor a 1, hay evidencia de no normalidad.</p>
-                    <p><strong>Numerador:</strong> Los coeficientes aᵢ (tabulados por Shapiro-Wilk según n) ponderan las diferencias entre residuales opuestos ordenados. Esta suma ponderada captura la forma general de la distribución.</p>
-                    <p><strong>Denominador:</strong> Es la varianza total de los residuales (Σ(eᵢ - ē)²), que normaliza la escala del estadístico entre 0 y 1.</p>
-                    <p>Con n = 4 por grupo y residuales pequeños y simétricos como los observados, la normalidad se apoya sin controversia. La conclusión es válida.</p>
+                  
+                  <div className="text-xs text-slate-700 bg-white p-2 border border-slate-200 rounded mb-4 max-h-[150px] overflow-y-auto">
+                    <table className="w-full text-center">
+                      <thead className="bg-slate-50 border-b border-slate-200">
+                        <tr>
+                          <th className="p-1">i</th>
+                          <th className="p-1">e<sub>(n-i+1)</sub></th>
+                          <th className="p-1">e<sub>(i)</sub></th>
+                          <th className="p-1">Δ = e_sup - e_inf</th>
+                          <th className="p-1">a<sub>i</sub></th>
+                          <th className="p-1">a<sub>i</sub> * Δ</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {shapiro.steps.map(s => (
+                          <tr key={s.i} className="border-b border-slate-100">
+                            <td className="p-1">{s.i}</td>
+                            <td className="p-1 font-mono">{s.term1.toFixed(3)}</td>
+                            <td className="p-1 font-mono">{s.term2.toFixed(3)}</td>
+                            <td className="p-1 font-mono">{s.diff.toFixed(3)}</td>
+                            <td className="p-1 font-mono text-indigo-600">{s.a.toFixed(4)}</td>
+                            <td className="p-1 font-mono text-blue-700 bg-blue-50 font-bold">{s.prod.toFixed(4)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div className="bg-white p-3 rounded border border-indigo-100 text-sm font-mono leading-relaxed shadow-sm">
+                    <strong>Sumatorio de (aᵢ * Δ) [b]:</strong> {shapiro.b.toFixed(4)}<br/>
+                    <strong>Suma de Cuadrados (SS):</strong> {shapiro.SS.toFixed(4)}<br/>
+                    <div className="mt-2 pt-2 border-t border-indigo-100 text-center text-lg text-indigo-800 bg-indigo-100 rounded">
+                      W = ({shapiro.b.toFixed(4)})² / {shapiro.SS.toFixed(4)} = <strong>{shapiro.W.toFixed(4)}</strong>
+                    </div>
+                  </div>
+
+                  <ExplanationBox show={showExplanations} title="¿Por qué Shapiro-Wilk es el método elegido sobre otros (cómo Kolmogorov-Smirnov)?">
+                    <p><strong>El problema de Kolmogorov-Smirnov:</strong> Históricamente se enseñaba la prueba de K-S debido a su sencillez de cálculo, pero tiene una debilidad aplastante: requiere tamaños de muestra masivos (N &gt; 50) para ser confiable. Con apenas N=12 residuales, K-S sería virtualmente ciego a desviaciones reales.</p>
+                    <p><strong>¿Por qué triunfa Shapiro-Wilk?</strong> Shapiro-Wilk (W) fue diseñado estrictamente para muestras diminutas (3 ≤ N ≤ 50). El test usa una correlación directa (matriz aᵢ) entre las diferencias simétricas de valores ordenados y los valores esperados de una Gaussiana teorética perfecta. Es universalmente considerado el <strong>test paramétrico incondicionalmente superior respecto a la potencia contra la Normalidad.</strong></p>
+                    <p><strong>Interpretación del resultado:</strong> El Numerador <strong>{shapiro.b.toFixed(4)}</strong> refleja cuan cerca siguen los datos su alineamiento en probabilidad, y el Denominador <strong>{shapiro.SS.toFixed(4)}</strong> normaliza la escala de dispersión. Un W₀ tan elevado dictamina que cualquier desviación de la perfecta simetría Gaussianiana no traspasa la barrera del "ruido estadístico" de muestrear apenas 12 ensayos.</p>
                   </ExplanationBox>
                 </div>
               </div>
             </div>
 
             {/* CAJA DE RESPUESTA FINAL */}
-            <div className="w-full mt-6 bg-blue-900 text-white p-4 rounded-xl shadow-lg border-l-8 border-l-blue-400">
-              <h4 className="font-bold text-white uppercase text-sm mb-1 tracking-wider opacity-90">Respuesta Final:</h4>
-              <p>Considerando la teoría estadística de telecomunicaciones, si bien el tamaño de muestra de este ensayo es extremadamente pequeño ($n=4$ por tratamiento) para confirmar firmemente una campana de Gauss; experimentalmente <strong>SÍ se apoyaría y asumiría la normalidad</strong> partiendo de la premisa de que los sistemas electrónicos y su ruido térmico siguen una Distribución Normal y que nuestra muestra no aparenta atípicos fatales (outliers) en sus residuales.</p>
+            <div className={`w-full mt-6 text-white p-4 rounded-xl shadow-lg border-l-8 ${shapiro.W > 0.859 ? 'bg-blue-900 border-l-emerald-400' : 'bg-red-900 border-l-red-400'}`}>
+              <h4 className="font-bold uppercase text-sm mb-1 tracking-wider opacity-90">Respuesta Final:</h4>
+              <p>Tras someter los residuales al estricto escrutinio del <strong>Test de Shapiro-Wilk</strong>, hemos obtenido un estadístico de correlación <strong>W = {shapiro.W.toFixed(4)}</strong>.</p>
+              <p className="mt-2">Consultando la tabla de valores críticos de Shapiro-Wilk para un tamaño de muestra global <strong>N = {shapiro.n}</strong> y un nivel de significancia <strong>α = 0.05</strong>, el umbral de rechazo es <strong>W<sub>crítico</sub> = 0.859</strong>. Dado que nuestro estadístico calculado ({shapiro.W.toFixed(4)}) es {shapiro.W > 0.859 ? 'SUPERIOR al valor crítico (Cae en Zona de Aceptación)' : 'INFERIOR al valor crítico (Cae en Zona de Rechazo)'}, <strong>{shapiro.W > 0.859 ? 'ACEPTAMOS la Hipótesis Nula (H₀)' : 'RECHAZAMOS la Hipótesis Nula (H₀)'}</strong> y {shapiro.W > 0.859 ? 'concluimos firmemente que los datos poblacionales SÍ provienen de una variable distribuida de forma Normal' : 'determinamos que los datos violan el supuesto de Normalidad'}.</p>
             </div>
           </div>
         )}
@@ -439,6 +485,10 @@ export default function Part1ANOVA({ showExplanations = false }) {
                   <div className="bg-white p-5 border border-blue-200 rounded-xl shadow-sm h-full flex flex-col">
                     <h4 className="font-bold text-blue-800 mb-2 border-b border-blue-100 pb-2">{"Secuencia Temporal (Test de Rachas)"}</h4>
                     <p className="text-sm text-slate-600 mb-3">{"Desplegamos los ensayos como una sola serie de tiempo simulada y codificamos con (+/-) respecto a su mediana global ("} <strong>{runsTestData.median.toFixed(3)}</strong> {"):"}</p>
+                    <ExplanationBox show={showExplanations} title="¿Por qué usar la Mediana y no la Media para dicotomizar?">
+                      <p>El primer paso del Test de Rachas exige dicotomizar los datos (convertirlos en dos categorías: exitos/fracasos o +/-). Se usa la <strong>mediana</strong> poblacional ({runsTestData.median.toFixed(3)}) en lugar de la media ({anova.grandMean.toFixed(3)}) porque la mediana es <strong>robusta a atípicos (outliers)</strong>.</p>
+                      <p>Matemáticamente, la mediana garantiza que la serie de tiempo se dividirá en aproximadamente mitades iguales (N₁ ≈ N₂). Si usáramos la media matemática en una distribución sesgada, correríamos el riesgo de obtener un test inválido donde el 90% de los datos queden abajo y solo un 10% arriba.</p>
+                    </ExplanationBox>
                     <div className="bg-slate-50 p-3 rounded font-mono text-sm leading-relaxed overflow-x-auto whitespace-nowrap mb-4 border border-slate-200">
                       <strong>Valores:</strong> {runsTestData.seq.map((v, i) => <span key={i} className="inline-block w-12">{v.toFixed(2)}</span>)}<br/>
                       <strong>Signos :</strong> {runsTestData.signs.map((s, i) => <span key={i} className={`inline-block w-12 font-bold ${s==='+'?'text-emerald-600':'text-red-500'}`}>{s}</span>)}
@@ -485,39 +535,64 @@ export default function Part1ANOVA({ showExplanations = false }) {
         {/* Q6: Varianzas Iguales */}
         {activeQ === 6 && (
           <div className="space-y-6 animate-fade-in flex flex-col h-full">
-            <h3 className="text-2xl font-bold text-blue-800 border-b border-blue-100 pb-2">{"6. ¿Las tres arquitecturas presentan la misma varianza?"}</h3>
+            <h3 className="text-2xl font-bold text-blue-800 border-b border-blue-100 pb-2">{"6. ¿Las tres arquitecturas presentan la misma varianza? (Test de Bartlett)"}</h3>
             
             <div className="flex-grow space-y-6">
               <div className="bg-slate-50 p-5 rounded-xl border border-slate-200 shadow-sm">
-                <div className="font-serif text-xl border-b border-slate-200 pb-3 mb-4 font-bold text-center text-blue-700">{"S² = Σ (Y"}<sub>{"ij"}</sub>{" - ȳ"}<sub>{"i"}</sub>{")² / (n - 1)"}</div>
                 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="font-serif text-xl border-b border-slate-200 pb-3 mb-4 font-bold text-center text-blue-700">{"S² = Σ(Y"}<sub>{"ij"}</sub>{" - ȳ"}<sub>{"i"}</sub>{")² / (n - 1)"}</div>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
                   {groups.map((group, i) => (
-                    <div key={i} className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm text-sm">
+                    <div key={i} className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm text-sm text-center flex flex-col justify-between">
                       <p className="font-bold text-slate-800 mb-2 uppercase text-xs">{group.name}</p>
-                      <div className="font-mono text-slate-500 overflow-x-auto whitespace-nowrap bg-slate-50 p-2 border border-slate-100 rounded mb-2 h-16 flex items-center">
-                        {group.data.map((v, idx) => `(${v.toFixed(2)}-${anova.means[i].toFixed(2)})²`).join(" + ")}<br/>
-                        {" / ("}{n}{" - 1)"}
+                      <div className="font-mono text-slate-500 overflow-x-auto whitespace-nowrap bg-slate-50 p-2 border border-slate-100 rounded mb-2 h-16 flex items-center justify-center text-[10px]">
+                        {group.data.map((v, idx) => `(${v.toFixed(2)}-${anova.means[i].toFixed(2)})²`).join(" + ")} / ({n}-1)
                       </div>
-                      <div className="text-right mt-1">
-                        <span className="font-bold text-blue-700 md:text-base">S²<sub>{i+1}</sub> = {variances[i].toFixed(5)}</span>
-                      </div>
+                      <span className="font-bold text-blue-700 md:text-base">S²<sub>{i+1}</sub> = {bartlett.variances[i].toFixed(5)}</span>
                     </div>
                   ))}
                 </div>
-                <ExplanationBox show={showExplanations} title="S²ᵢ: Varianza Muestral de cada Arquitectura">
-                  <p>La fórmula S² = Σ(Yᵢⱼ − ȳᵢ)² / (n−1) mide <strong>cuán dispersas son las mediciones dentro de cada grupo</strong>, ignorando completamente las diferencias entre grupos.</p>
-                  <p>El divisor es <strong>(n−1) = {n-1}</strong> en lugar de n porque al estimar la media ȳᵢ desde la misma muestra se pierde un grado de libertad. Dividir entre (n−1) produce un estimador insesgado de la varianza poblacional σ².</p>
-                  <p>S²₁ = {variances[0].toFixed(5)}, S²₂ = {variances[1].toFixed(5)}, S²₃ = {variances[2].toFixed(5)} son prácticamente iguales. La diferencia máxima entre ellas es {Math.max(...variances)-Math.min(...variances) < 0.001 ? 'menor a 0.001' : (Math.max(...variances)-Math.min(...variances)).toFixed(5)}, lo que confirma formalmente la <strong>Homocedasticidad</strong> que ANOVA de Fisher necesita.</p>
+
+                <div className="bg-white p-5 border border-indigo-200 rounded-xl shadow-sm h-full flex flex-col">
+                  <h4 className="font-bold text-indigo-800 mb-4 border-b border-indigo-100 pb-2 text-center">Cálculo del Estadístico Chi-Cuadrado (χ²) de Bartlett</h4>
+                  
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    <div className="bg-slate-50 p-4 border border-slate-200 rounded text-sm font-mono leading-relaxed overflow-x-auto whitespace-nowrap">
+                      <span className="text-slate-500 font-bold mb-1 block">// 1. Varianza Agrupada (S²_p)</span>
+                      S²_p = {bartlett.S2_p.toFixed(5)}<br/>
+                      <br/>
+                      <span className="text-slate-500 font-bold mb-1 block">// 2. Numerador del Test</span>
+                      Numerador = (N-k)ln(S²_p) - Σ(nᵢ-1)ln(S²ᵢ)<br/>
+                      Numerador = ({bartlett.N}-{bartlett.k})ln({bartlett.S2_p.toFixed(5)}) - [...] = <strong>{bartlett.chi_sq_numerator.toFixed(5)}</strong><br/>
+                      <br/>
+                      <span className="text-slate-500 font-bold mb-1 block">// 3. Factor de Corrección (C)</span>
+                      C = 1 + [1/(3(k-1))] * [Σ(1/(nᵢ-1)) - 1/(N-k)]<br/>
+                      C = <strong>{bartlett.C.toFixed(5)}</strong>
+                    </div>
+
+                    <div className="bg-indigo-50 p-4 border border-indigo-200 rounded text-center flex flex-col justify-center">
+                      <p className="font-serif text-indigo-800 text-lg mb-2">χ²₀ = Numerador / C</p>
+                      <p className="text-2xl font-bold text-indigo-900 bg-white p-3 rounded shadow-sm border border-indigo-100">
+                        χ²₀ = {bartlett.chi_sq_numerator.toFixed(5)} / {bartlett.C.toFixed(5)}<br/>
+                        <span className="text-3xl text-blue-700 mt-2 block">χ²₀ = {bartlett.chi_sq.toFixed(5)}</span>
+                      </p>
+                      <p className="mt-4 text-slate-700">P-valor = <strong>{bartlett.p_value.toFixed(4)}</strong></p>
+                    </div>
+                  </div>
+                </div>
+
+                <ExplanationBox show={showExplanations} title="El Test de Bartlett: Porqué descartamos el empirismo simple">
+                  <p><strong>El riesgo de mirar y asumir:</strong> Observar que S²₁, S²₂ y S²₃ (0.00250, 0.00417, 0.00456) son "parecidas" carece completamente de validez y rigor en un proyecto académico. Hay que someter las proporciones a prueba. La prueba idónea teórica es la de <strong>Bartlett</strong> sobre alternativas como <strong>Levene</strong>.</p>
+                  <p><strong>¿Por qué Bartlett y no Levene u otro test?</strong> El Test de Levene transforma los datos en valores absolutos y es tremendamente robusto si los datos NO fueran normales. Sin embargo, en el paso 4 ya determinamos brillantemente bajo el Teorema de Shapiro que la muestra SÍ ES NORMAL. Por estadística pura, cuando el supuesto de Normalidad se cumple, el Test de Paramétrico de Bartlett arroja una potencia analítica matemáticamente avasalladora que la empírica de Levene no detectaría en muestras tan diminutas.</p>
+                  <p><strong>El Factor de Corrector (C):</strong> Nuestro problema experimental es el tamaño muestral ($N_i=4$). Chi-cuadrada tradicional está sobre-disparado para muestras pequeñas. El factor C inventado por Bartlett comprime matemáticamente el Chi-Cuadrado resultante para eliminar ese sesgo, permitiéndonos realizar la prueba correctamente.</p>
                 </ExplanationBox>
               </div>
             </div>
 
-
             {/* CAJA DE RESPUESTA FINAL */}
-            <div className="w-full mt-6 bg-blue-900 text-white p-4 rounded-xl shadow-lg border-l-8 border-l-blue-400">
+            <div className={`w-full mt-6 text-white p-4 rounded-xl shadow-lg border-l-8 ${bartlett.chi_sq > cvBartlett ? 'bg-red-900 border-l-red-400' : 'bg-blue-900 border-l-emerald-400'}`}>
               <h4 className="font-bold text-white uppercase text-sm mb-1 tracking-wider opacity-90">Respuesta Final:</h4>
-              <p>Revisando los cálculos exactos, tenemos S²<sub>1</sub>={variances[0].toFixed(5)}, S²<sub>2</sub>={variances[1].toFixed(5)} y S²<sub>3</sub>={variances[2].toFixed(5)}; las cuales son matemáticamente casi idénticas a simple inspección. Con este grado tan alto de proximidad, <strong>SÍ, asumimos férreamente que las arquitecturas presentan la misma varianza (Homocedasticidad)</strong>; es decir, cumplen sin problemas el supuesto para el uso estricto del estadístico F de Fisher del proyecto.</p>
+              <p>Revisando los cálculos exactos a través de la Prueba Paramétrica de Bartlett, tenemos un estadístico <strong>χ²₀ = {bartlett.chi_sq.toFixed(5)}</strong>. Al contrastarlo con el Valor Crítico de la tabla Chi-Cuadrada (α=0.05, GL={bartlett.df}) que es <strong>{cvBartlett.toFixed(4)}</strong>, observamos que χ²₀ es profundamente inferior al límite crítico (y un P-valor de {bartlett.p_value.toFixed(4)} &gt; 0.05). En consecuencia, <strong>SÍ, asumimos férreamente que las arquitecturas presentan la misma varianza (Homocedasticidad)</strong>; cumpliendo el supuesto vital para el uso estricto de ANOVA.</p>
             </div>
           </div>
         )}
